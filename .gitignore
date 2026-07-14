@@ -1,0 +1,36 @@
+# ---- 密钥与本地配置（绝不能进仓库）----
+.env
+.env.*
+!.env.example
+
+# ---- 玩家的本地数据 ----
+# llm_config.json 里是明文 API Key；app.db 是存档；uploads 是上传的图片文件
+backend/data/
+!backend/data/.gitkeep
+
+# ---- 依赖与构建产物 ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---- 运行时 ----
+*.log
+.running-pids.txt
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.claude/
+.cursor/
+.DS_Store
+Thumbs.db
+desktop.ini

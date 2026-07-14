@@ -1,0 +1,27 @@
+/** visible_layer 字段路径 → 标题（用于预览区） */
+
+export const VISIBLE_LABELS: Record<string, string> = {
+  display_name: "角色名称",
+  "basic_info._section": "基础信息",
+  "basic_info.gender": "性别",
+  "basic_info.age_or_life_stage": "年龄 / 阶段",
+  "basic_info.identity_role": "身份",
+  "basic_info.location_context": "所在环境",
+  "basic_info.relationship_status": "感情状态",
+  "relationship_with_user._section": "与你的关系",
+  "relationship_with_user.known_context": "认识关系",
+  "relationship_with_user.interaction_frequency": "互动频率",
+  "relationship_with_user.current_interaction_summary": "当前互动概况",
+  explicit_personality_notes: "明确性格描述",
+  explicit_interests: "兴趣爱好",
+  "explicit_preferences._section": "明确偏好",
+  "explicit_preferences.likes": "喜欢",
+  "explicit_preferences.dislikes": "不喜欢",
+  "observable_chat_style._section": "聊天表现",
+  "observable_chat_style.message_length": "回复长度",
+  "observable_chat_style.emoji_usage": "表情使用",
+  "observable_chat_style.initiative_pattern": "主动程度",
+  "observable_chat_style.expression_features": "表达特征",
+  "observable_chat_style.typical_phrases": "常用表达",
+  visible_background: "背景信息",
+};
