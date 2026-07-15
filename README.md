@@ -35,7 +35,7 @@
 点右上角绿色 `Code` → `Download ZIP` → 解压。或者：
 
 ```bash
-git clone https://github.com/<your-name>/xindong-lab.git
+git clone https://github.com/407928176-spec/xindong-lab.git
 ```
 
 ### 3. 启动
