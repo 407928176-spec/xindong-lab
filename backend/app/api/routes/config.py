@@ -50,6 +50,7 @@ def test_llm_config(payload: LlmConfigInput) -> LlmProbeResponse:
         message=result.message,
         web_search_supported=result.web_search_supported,
         web_search_message=result.web_search_message,
+        base_url=result.base_url,
     )
 
 
@@ -66,7 +67,9 @@ def save_llm_config(payload: LlmConfigInput) -> LlmConfigStatus:
 
     saved = llm_config.save(
         llm_config.LlmConfig(
-            base_url=cfg.base_url,
+            # 存实测通过的那个地址：probe 可能给缺 /v1 的地址补全过，
+            # 存用户原样填的会把刚验证好的配置又变回不可用的。
+            base_url=result.base_url or cfg.base_url,
             api_key=cfg.api_key,
             model=cfg.model,
             aux_model=cfg.aux_model,

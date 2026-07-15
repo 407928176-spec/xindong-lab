@@ -17,37 +17,107 @@ function Write-Step($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 function Write-Fail($msg) { Write-Host "  [x] $msg" -ForegroundColor Red }
 function Write-Note($msg) { Write-Host "      $msg" -ForegroundColor DarkGray }
 
+function Find-Python {
+    foreach ($c in @('python', 'python3')) {
+        $found = Get-Command $c -ErrorAction SilentlyContinue
+        if ($found) {
+            # 需要 3.11+：代码用了 StrEnum、X | Y 类型标注等新语法
+            & $found.Source -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+            if ($LASTEXITCODE -eq 0) { return $found.Source }
+        }
+    }
+    return $null
+}
+
+# 装完 winget 包之后，系统 PATH 已经变了，但当前这个 PowerShell 进程的 $env:Path
+# 还是启动时的旧快照。从注册表重新拼一遍，装完当场就能用，不用再双击一次。
+function Update-PathFromRegistry {
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = @($machinePath, $userPath) -join ';'
+}
+
+# 缺 Python / Node 时：有 winget 就问一声要不要自动装（会弹一次 Windows 管理员确认框）；
+# 没有 winget，或者用户不想自动装，就直接带去官网下载页，让用户自己走安装向导。
+function Install-Runtime-Or-Guide {
+    param(
+        [string]$DisplayName,
+        [string]$WingetId,
+        [string]$DownloadUrl,
+        [string]$ExtraNote = ""
+    )
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+
+    if (-not $winget) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "心动实验室需要 $DisplayName，但这台电脑上没有检测到，也没有可用的自动安装工具（winget）。`n`n即将为你打开官网下载页，请手动安装。$ExtraNote",
+            "心动实验室 - 缺少运行环境",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        Start-Process $DownloadUrl
+        return $false
+    }
+
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "心动实验室需要 $DisplayName，但这台电脑上没有检测到。`n`n点「是」自动安装（会弹出 Windows 管理员确认框）；点「否」自己去官网下载安装。",
+        "心动实验室 - 缺少运行环境",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Start-Process $DownloadUrl
+        return $false
+    }
+
+    Write-Step "正在通过 winget 安装 $DisplayName（第一次可能要几分钟，请留意可能弹出的管理员确认框）..."
+    & winget install --id $WingetId -e --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "$DisplayName 自动安装失败，即将为你打开官网下载页，请手动安装。$ExtraNote",
+            "心动实验室 - 自动安装失败",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        Start-Process $DownloadUrl
+        return $false
+    }
+    Update-PathFromRegistry
+    Write-Step "$DisplayName 安装完成。"
+    return $true
+}
+
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Magenta
 Write-Host "     心动实验室 —— 启动中" -ForegroundColor Magenta
 Write-Host "  ============================================" -ForegroundColor Magenta
 Write-Host ""
 
-# ---------- 1. 检查运行环境 ----------
-$pythonCmd = $null
-foreach ($c in @('python', 'python3')) {
-    $found = Get-Command $c -ErrorAction SilentlyContinue
-    if ($found) {
-        # 需要 3.11+：代码用了 StrEnum、X | Y 类型标注等新语法
-        & $c -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
-        if ($LASTEXITCODE -eq 0) { $pythonCmd = $found.Source; break }
-    }
+# ---------- 1. 检查运行环境（缺了就问一下要不要自动装）----------
+$pythonCmd = Find-Python
+if (-not $pythonCmd) {
+    $installed = Install-Runtime-Or-Guide -DisplayName "Python 3.12" -WingetId "Python.Python.3.12" `
+        -DownloadUrl "https://www.python.org/downloads/" `
+        -ExtraNote "安装时请务必勾选「Add Python to PATH」。"
+    if ($installed) { $pythonCmd = Find-Python }
 }
 if (-not $pythonCmd) {
     Write-Fail "没有找到 Python 3.11 或更新版本。"
     Write-Host ""
-    Write-Note "请先安装 Python： https://www.python.org/downloads/"
+    Write-Note "装好之后重新双击「心动实验室.exe」（或运行 start.bat）即可。"
     Write-Note "安装时请务必勾选 「Add Python to PATH」。"
     Write-Host ""
     exit 1
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Fail "没有找到 Node.js。"
-    Write-Host ""
-    Write-Note "请先安装 Node.js 20 或更新版本： https://nodejs.org/"
-    Write-Host ""
-    exit 1
+    $installed = Install-Runtime-Or-Guide -DisplayName "Node.js" -WingetId "OpenJS.NodeJS.LTS" `
+        -DownloadUrl "https://nodejs.org/"
+    if (-not $installed -or -not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Fail "没有找到 Node.js。"
+        Write-Host ""
+        Write-Note "装好之后重新双击「心动实验室.exe」（或运行 start.bat）即可。"
+        Write-Host ""
+        exit 1
+    }
 }
 $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
 if ($nodeMajor -lt 20) {
@@ -112,6 +182,23 @@ if (Test-Path -LiteralPath $PidFile) {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
 
+# PID 文件之外还可能有孤儿进程（上次异常退出、或文件被删）。它们占着端口不放，
+# 新起的服务会静默失败——旧进程还在响应，页面打得开，但跑的是上一版代码，
+# 让人误以为「重启过了」。这里按端口反查，只清命令行里带本项目路径的进程，
+# 玩家自己开的 node / python 不受影响。
+foreach ($port in @(8000, 3000)) {
+    foreach ($conn in (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        $procId = [int]$conn.OwningProcess
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.CommandLine -and
+            $proc.CommandLine.IndexOf($Root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Write-Note "清理上次残留的进程（端口 $port）..."
+            try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch {}
+        }
+    }
+}
+Start-Sleep -Milliseconds 500
+
 $backend = Start-Process -FilePath $VenvPy `
     -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000' `
     -WorkingDirectory $BackendDir -WindowStyle Minimized -PassThru
@@ -153,6 +240,20 @@ if (-not $frontendReady) {
     Write-Fail "前端启动超时。请查看最小化的前端窗口里的报错信息。"
     exit 1
 }
+
+# 服务已在监听，把「真正占着端口的那个进程」也记进 PID 文件。
+# 上面记的是 Start-Process 拿到的父进程，但前端的进程链是 cmd → npm → node：
+# 中间那层退出后，真正监听 3000 的 node 就成了孤儿，顺着父子关系再也找不到它，
+# stop.bat 会漏杀、端口一直被占着，下次启动的新前端起不来（旧页面还能打开，
+# 于是「明明重启了，跑的还是旧代码」）。直接把监听者的 PID 记下来最稳。
+$listenerIds = @()
+foreach ($port in @(8000, 3000)) {
+    foreach ($conn in (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+        $listenerIds += [int]$conn.OwningProcess
+    }
+}
+Set-Content -LiteralPath $PidFile `
+    -Value (@($backend.Id, $frontend.Id) + $listenerIds | Select-Object -Unique) -Encoding ascii
 
 Write-Host ""
 Write-Host "  ============================================" -ForegroundColor Green

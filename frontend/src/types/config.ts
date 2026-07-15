@@ -20,4 +20,6 @@ export interface LlmProbeResponse {
   message: string;
   web_search_supported: boolean;
   web_search_message: string;
+  /** 实测可用的 Base URL，可能是后端自动补全 /v1 后的结果。 */
+  base_url: string;
 }

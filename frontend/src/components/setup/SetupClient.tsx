@@ -5,8 +5,10 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ChevronDown, Eye, EyeOff, Globe, Loader2 } from "lucide-react";
 
+import { requestGuideOnNextEntry } from "@/components/onboarding/guide-storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useLlmConfig } from "@/contexts/LlmConfigContext";
 import {
   PROVIDER_PRESETS,
   WEB_SEARCH_NOTICE,
@@ -25,6 +27,7 @@ type FieldErrors = { base_url?: string; api_key?: string; model?: string };
 
 export function SetupClient({ mode = "setup" }: SetupClientProps) {
   const router = useRouter();
+  const { refresh: refreshLlmConfig } = useLlmConfig();
   const isSetup = mode === "setup";
 
   const [baseUrl, setBaseUrl] = useState("");
@@ -92,18 +95,24 @@ export function SetupClient({ mode = "setup" }: SetupClientProps) {
     setTesting(true);
     setProbe(null);
     try {
-      setProbe(await testLlmConfig(payload()));
+      const result = await testLlmConfig(payload());
+      setProbe(result);
+      // 后端可能把缺 /v1 的地址补全后才测通，回填让用户看到真正生效的地址。
+      if (result.ok && result.base_url && result.base_url !== baseUrl.trim()) {
+        setBaseUrl(result.base_url);
+      }
     } catch (e) {
       setProbe({
         ok: false,
         message: e instanceof Error ? e.message : "测试失败",
         web_search_supported: false,
         web_search_message: "",
+        base_url: "",
       });
     } finally {
       setTesting(false);
     }
-  }, [validate, payload]);
+  }, [validate, payload, baseUrl]);
 
   const handleSave = useCallback(async () => {
     setSaveError(null);
@@ -112,15 +121,23 @@ export function SetupClient({ mode = "setup" }: SetupClientProps) {
     setSaving(true);
     try {
       // 后端保存前会自己再测一遍，测不通直接 400，不会存下一份用不了的配置。
-      await saveLlmConfig(payload());
+      const savedStatus = await saveLlmConfig(payload());
       if (isSetup) {
+        // 配置完成 = 玩家第一次真正进游戏，请引导在落地后弹出来。
+        requestGuideOnNextEntry();
+        // 必须在跳转前把全局的 LlmConfigContext 同步成「已配置」。
+        // 否则 SetupGuard 读到的 status 还是挂载时缓存的 unconfigured，
+        // 会在跳到 "/" 的同一时刻把用户弹回 /setup，表现为「保存成功但卡在配置页」。
+        await refreshLlmConfig();
         router.replace("/");
-        router.refresh();
       } else {
         setSaved(true);
         setApiKey("");
-        const cfg = await fetchLlmConfig();
-        setKeyPlaceholder(cfg.api_key_masked ? `${cfg.api_key_masked}（如需更换请重新输入）` : "");
+        // 存下来的可能是自动补全 /v1 之后的地址，回填成实际生效的那个。
+        setBaseUrl(savedStatus.base_url);
+        setKeyPlaceholder(
+          savedStatus.api_key_masked ? `${savedStatus.api_key_masked}（如需更换请重新输入）` : "",
+        );
         setProbe(null);
       }
     } catch (e) {
@@ -128,7 +145,7 @@ export function SetupClient({ mode = "setup" }: SetupClientProps) {
     } finally {
       setSaving(false);
     }
-  }, [validate, payload, isSetup, router]);
+  }, [validate, payload, isSetup, router, refreshLlmConfig]);
 
   const busy = testing || saving;
 
@@ -278,7 +295,7 @@ export function SetupClient({ mode = "setup" }: SetupClientProps) {
                   className={`size-3.5 transition-transform ${showAdvanced ? "rotate-180" : ""}`}
                   aria-hidden
                 />
-                高级：单独指定辅助模型
+                高级：其他环节单独用另一个模型
               </button>
               {showAdvanced && (
                 <div className="mt-2">
@@ -292,8 +309,10 @@ export function SetupClient({ mode = "setup" }: SetupClientProps) {
                     }}
                   />
                   <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">
-                    辅助模型负责状态评估、结局评价、长期记忆总结。这些环节不需要很强的文笔，
-                    换成更便宜更快的模型可以省钱。
+                    此处的模型负责人设创建对话、状态评估、结局文案与长期记忆总结。这些调用均在角色回复
+                    呈现之后于后台执行，耗时长短不影响你的实际体感，因此建议选用能力更强的旗舰模型，
+                    不必顾虑速度。上面的模型负责角色回复，需等整段内容生成完毕才会显示，其响应速度
+                    直接决定你的等待时长，建议优先考虑响应较快的型号。
                   </p>
                 </div>
               )}

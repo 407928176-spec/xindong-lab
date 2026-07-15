@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
+import { GameGuide } from "@/components/onboarding/GameGuide";
 import { DesktopSidebar } from "@/components/shell/DesktopSidebar";
 import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ export function AppShell({ children, className, withDesktopSidebar = false, with
         <div className="relative z-10">{children}</div>
       )}
       {showMobileNav ? <MobileBottomNav /> : null}
+      <GameGuide />
     </div>
   );
 }

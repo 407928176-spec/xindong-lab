@@ -1,10 +1,11 @@
 # 默认统一用 LF 入库，检出时由各平台自行处理。
 * text=auto eol=lf
 
-# start.sh 必须是 LF。带 CRLF 的 shell 脚本在 macOS / Linux 上会直接报
+# start.sh / 心动实验室.command 必须是 LF。带 CRLF 的 shell 脚本在 macOS / Linux 上会直接报
 # "bad interpreter: /usr/bin/env bash^M" —— 在 Windows 上开发时 git 默认会把它转成
 # CRLF，这条规则就是防这个的。
 *.sh text eol=lf
+*.command text eol=lf
 
 # cmd.exe 和 PowerShell 期望 CRLF。
 *.bat text eol=crlf
@@ -19,3 +20,4 @@
 *.ico binary
 *.mp3 binary
 *.docx binary
+*.exe binary

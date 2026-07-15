@@ -32,3 +32,6 @@ class LlmProbeResponse(BaseModel):
     message: str
     web_search_supported: bool = False
     web_search_message: str = ""
+    base_url: str = Field(
+        "", description="实测可用的 Base URL，可能是自动补全 /v1 后的结果，前端应据此回填输入框"
+    )

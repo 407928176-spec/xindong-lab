@@ -31,8 +31,9 @@
 
 ```bash
 # 一键启动（含依赖安装、建库、构建）
-start.bat            # Windows
-bash start.sh        # macOS / Linux
+心动实验室.exe        # Windows：玩家入口，内部调用 start.ps1（start.bat 仍可用）
+心动实验室.command    # macOS：玩家入口，内部调用 start.sh
+bash start.sh        # Linux
 
 # 后端（在 backend/ 下）
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
