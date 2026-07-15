@@ -17,6 +17,30 @@ function Write-Step($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 function Write-Fail($msg) { Write-Host "  [x] $msg" -ForegroundColor Red }
 function Write-Note($msg) { Write-Host "      $msg" -ForegroundColor DarkGray }
 
+# 双击「心动实验室.exe」时，start.ps1 是在一个全新的、没有人盯着的控制台窗口里跑的。
+# 以前失败时直接 `exit 1`，窗口会跟着 powershell.exe 进程一起瞬间关掉，玩家连错误
+# 信息是什么都看不清就没了（表现为"卡一下然后闪退"）。所以失败退出前一律停下来等一个按键。
+#
+# 只在真正的交互式控制台里等：这个脚本也会被自动化测试用管道 / 重定向的方式跑，
+# 那种场景下 stdin 不是键盘，ReadKey 会永远等不到输入，把测试也一起卡死。
+function Exit-Failed {
+    param([int]$Code = 1)
+    if (-not [Console]::IsInputRedirected) {
+        Write-Host ""
+        Write-Host "  按任意键关闭这个窗口..." -ForegroundColor DarkGray
+        $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    }
+    exit $Code
+}
+
+# 兜底：任何没被下面显式 try/catch 住的意外错误（比如权限问题、磁盘写满这类没预料到
+# 的状况），也要走同一条「停下来等按键」的路，而不是让窗口带着一句看不清的报错消失。
+trap {
+    Write-Host ""
+    Write-Fail "启动过程中出现意外错误：$($_.Exception.Message)"
+    Exit-Failed
+}
+
 function Find-Python {
     foreach ($c in @('python', 'python3')) {
         $found = Get-Command $c -ErrorAction SilentlyContinue
@@ -105,7 +129,7 @@ if (-not $pythonCmd) {
     Write-Note "装好之后重新双击「心动实验室.exe」（或运行 start.bat）即可。"
     Write-Note "安装时请务必勾选 「Add Python to PATH」。"
     Write-Host ""
-    exit 1
+    Exit-Failed
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -116,14 +140,14 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Host ""
         Write-Note "装好之后重新双击「心动实验室.exe」（或运行 start.bat）即可。"
         Write-Host ""
-        exit 1
+        Exit-Failed
     }
 }
 $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
 if ($nodeMajor -lt 20) {
     Write-Fail "Node.js 版本过低（当前 $(& node -v)），需要 20 或更新版本。"
     Write-Host ""
-    exit 1
+    Exit-Failed
 }
 
 # ---------- 2. 后端依赖 ----------
@@ -132,7 +156,7 @@ if (-not (Test-Path -LiteralPath $VenvPy)) {
     Write-Note "这一步需要 3-5 分钟，只有第一次需要，请耐心等待。"
     Write-Host ""
     & $pythonCmd -m venv (Join-Path $BackendDir '.venv')
-    if ($LASTEXITCODE -ne 0) { Write-Fail "创建 Python 虚拟环境失败。"; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Write-Fail "创建 Python 虚拟环境失败。"; Exit-Failed }
 
     & $VenvPy -m pip install --upgrade pip --quiet
     Write-Note "正在下载依赖（走清华镜像加速）..."
@@ -140,7 +164,7 @@ if (-not (Test-Path -LiteralPath $VenvPy)) {
     if ($LASTEXITCODE -ne 0) {
         Write-Note "镜像源失败，改用官方源重试..."
         & $VenvPy -m pip install -r (Join-Path $BackendDir 'requirements.txt') --quiet
-        if ($LASTEXITCODE -ne 0) { Write-Fail "后端依赖安装失败，请检查网络连接。"; exit 1 }
+        if ($LASTEXITCODE -ne 0) { Write-Fail "后端依赖安装失败，请检查网络连接。"; Exit-Failed }
     }
 } else {
     Write-Step "[1/4] 后端环境已就绪"
@@ -153,18 +177,24 @@ if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir 'node_modules'))) {
     & npm install --no-audit --no-fund
     $ok = $LASTEXITCODE -eq 0
     Pop-Location
-    if (-not $ok) { Write-Fail "前端依赖安装失败，请检查网络连接。"; exit 1 }
+    if (-not $ok) { Write-Fail "前端依赖安装失败，请检查网络连接。"; Exit-Failed }
 } else {
     Write-Step "[2/4] 前端环境已就绪"
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir '.next'))) {
+# 判断"构建过"要看 BUILD_ID 存不存在，不能只看 .next 目录存不存在：
+# 只要 `npm run build` 真正跑起来过，.next 目录就会被创建，哪怕过程中失败或被中途打断
+# （比如上一次启动失败、窗口被关掉）。BUILD_ID 是构建流程走到最后才写的文件，只有它在
+# 才说明上次是真的构建成功了；否则会出现"看起来构建过，实际是个半成品，npm run start
+# 起不来、一直卡在等服务就绪"的情况。
+$buildIdPath = Join-Path $FrontendDir '.next\BUILD_ID'
+if (-not (Test-Path -LiteralPath $buildIdPath)) {
     Write-Step "[3/4] 首次运行，正在构建前端（约 1-3 分钟，只有第一次需要）..."
     Push-Location $FrontendDir
     & npm run build
-    $ok = $LASTEXITCODE -eq 0
+    $ok = ($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $buildIdPath)
     Pop-Location
-    if (-not $ok) { Write-Fail "前端构建失败。"; exit 1 }
+    if (-not $ok) { Write-Fail "前端构建失败。"; Exit-Failed }
 } else {
     Write-Step "[3/4] 前端已构建"
 }
@@ -172,7 +202,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir '.next'))) {
 # ---------- 4. 初始化数据库并启动 ----------
 Write-Step "[4/4] 正在启动服务..."
 & $VenvPy (Join-Path $BackendDir 'scripts\init_db.py')
-if ($LASTEXITCODE -ne 0) { Write-Fail "数据库初始化失败。"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Fail "数据库初始化失败。"; Exit-Failed }
 
 # 先清掉上一次可能残留的进程，避免端口被占。
 if (Test-Path -LiteralPath $PidFile) {
@@ -224,7 +254,7 @@ foreach ($i in 1..60) {
 }
 if (-not $ready) {
     Write-Fail "后端启动超时。请查看最小化的后端窗口里的报错信息。"
-    exit 1
+    Exit-Failed
 }
 
 # 前端 next start 比后端稍慢一点
@@ -238,7 +268,7 @@ foreach ($i in 1..30) {
 }
 if (-not $frontendReady) {
     Write-Fail "前端启动超时。请查看最小化的前端窗口里的报错信息。"
-    exit 1
+    Exit-Failed
 }
 
 # 服务已在监听，把「真正占着端口的那个进程」也记进 PID 文件。

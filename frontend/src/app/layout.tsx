@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Fraunces, Geist, Geist_Mono, Noto_Sans_SC } from "next/font/google";
+import localFont from "next/font/local";
 
 import { BgmPlayer } from "@/components/bgm/BgmPlayer";
 import { SetupGuard } from "@/components/setup/SetupGuard";
@@ -7,29 +7,38 @@ import { AppShell } from "@/components/shell/AppShell";
 import { LlmConfigProvider } from "@/contexts/LlmConfigContext";
 import "./globals.css";
 
-const geistSans = Geist({
+// 字体文件本地打包（src/fonts/，来自 Google Fonts 官方 CDN，latin 子集，SIL OFL 授权可再分发），
+// 不用 next/font/google：那个方案要在 `next build` 时联网下载字体，国内网络访问不到
+// fonts.gstatic.com 会导致构建卡死重试、最终失败——「双击即玩」的核心承诺经不起这个依赖。
+// 重新生成见 frontend/src/fonts/README.md。
+const geistSans = localFont({
+  src: "../fonts/geist-var.woff2",
   variable: "--font-geist-sans",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "../fonts/geist-mono-var.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
-const notoSansSC = Noto_Sans_SC({
+const notoSansSC = localFont({
+  src: "../fonts/noto-sans-sc-var.woff2",
   variable: "--font-noto-zh",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
+  weight: "400 700",
   display: "swap",
   preload: false,
 });
 
-const fraunces = Fraunces({
+const fraunces = localFont({
+  src: [
+    { path: "../fonts/fraunces-normal-var.woff2", weight: "500 700", style: "normal" },
+    { path: "../fonts/fraunces-italic-var.woff2", weight: "500 700", style: "italic" },
+  ],
   variable: "--font-fraunces",
-  subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  style: ["normal", "italic"],
   display: "swap",
 });
 
