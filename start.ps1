@@ -13,6 +13,15 @@ $FrontendDir = Join-Path $Root 'frontend'
 $VenvPy = Join-Path $BackendDir '.venv\Scripts\python.exe'
 $PidFile = Join-Path $Root '.running-pids.txt'
 
+# 自动安装 Python 时的版本上限：只装到 3.13 系列，不追更新的 3.14+。
+# 原因：游戏依赖（SQLAlchemy 等，版本都锁定了）是在特定 Python 上验证过的，Python 一旦
+# 比它们新就可能崩——实测 Python 3.14 就撞上了 SQLAlchemy 2.0.36 尚未适配的类型系统改动，
+# 导致「数据库初始化失败」。开发与全部单测都在 3.13 上跑通，所以封顶到 3.13 最稳妥。
+# 等依赖都适配了更新的 Python，把这个数字往上抬即可。
+# 注意：这只影响「本机没有 Python、需要我们代装」的情况；已经装了可用 Python（>=3.11）的
+# 机器根本不会触发自动安装，不受这个上限约束。
+$MaxPythonMinor = 13
+
 function Write-Step($msg) { Write-Host "  $msg" -ForegroundColor Cyan }
 function Write-Fail($msg) { Write-Host "  [x] $msg" -ForegroundColor Red }
 function Write-Note($msg) { Write-Host "      $msg" -ForegroundColor DarkGray }
@@ -45,9 +54,29 @@ function Find-Python {
     foreach ($c in @('python', 'python3')) {
         $found = Get-Command $c -ErrorAction SilentlyContinue
         if ($found) {
-            # 需要 3.11+：代码用了 StrEnum、X | Y 类型标注等新语法
-            & $found.Source -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+            # 需要 3.11+：代码用了 StrEnum、X | Y 类型标注等新语法。
+            # 同时不能太新：依赖只在 <=3.$MaxPythonMinor 上验证过，更新的 Python 会崩
+            # （见文件开头常量说明）。所以只接受 3.11 ~ 3.$MaxPythonMinor 这个区间。
+            & $found.Source -c "import sys; v=(sys.version_info.major, sys.version_info.minor); sys.exit(0 if (3, 11) <= v <= (3, $MaxPythonMinor) else 1)" 2>$null
             if ($LASTEXITCODE -eq 0) { return $found.Source }
+        }
+    }
+    return $null
+}
+
+# 探测机器上是否装了「太新、依赖还不支持」的 Python（比上限还新）。用于在找不到可用
+# Python 时给一句清楚的提示——直接告诉用户「你的 Python 太新了，请装 3.11~3.13」，而不是
+# 让它进到后面崩在一堆看不懂的 SQLAlchemy 报错里。返回版本号字符串（如 "3.14"），没有就 $null。
+function Find-TooNewPython {
+    foreach ($c in @('python', 'python3')) {
+        $found = Get-Command $c -ErrorAction SilentlyContinue
+        if ($found) {
+            $ver = & $found.Source -c "import sys; print('%d.%d' % (sys.version_info.major, sys.version_info.minor))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $ver) {
+                $parts = $ver.Trim().Split('.')
+                $major = [int]$parts[0]; $minor = [int]$parts[1]
+                if ($major -gt 3 -or ($major -eq 3 -and $minor -gt $MaxPythonMinor)) { return $ver.Trim() }
+            }
         }
     }
     return $null
@@ -55,8 +84,9 @@ function Find-Python {
 
 # winget 上 Python 没有「永远指向最新版」的单一包 ID（不像 Node 有 OpenJS.NodeJS），
 # 每个小版本各自一个包（Python.Python.3.12、3.13、3.14……），所以要自己去查一遍目录、
-# 挑数字最大的那个。查不到就返回 $null，调用方要有一个写死的稳妥版本兜底——不能因为
-# 这一步查询失败，就把原本能用的自动安装也搭进去。
+# 挑数字最大、但不超过 $MaxPythonMinor 上限的那个（见上文常量的说明：太新的 Python
+# 依赖还没适配，会崩）。查不到就返回 $null，调用方要有一个写死的稳妥版本兜底——不能
+# 因为这一步查询失败，就把原本能用的自动安装也搭进去。
 function Get-LatestPythonWingetId {
     try {
         $raw = & winget search "Python.Python.3" --source winget 2>$null
@@ -71,7 +101,8 @@ function Get-LatestPythonWingetId {
             $candidates += [PSCustomObject]@{ Id = $Matches[1]; Minor = [int]$Matches[2] }
         }
     }
-    if ($candidates.Count -eq 0) { return $null }
+    $candidates = $candidates | Where-Object { $_.Minor -le $MaxPythonMinor }
+    if (-not $candidates) { return $null }
     return ($candidates | Sort-Object Minor -Descending | Select-Object -First 1).Id
 }
 
@@ -96,10 +127,13 @@ function Get-LatestPythonVersionFromMirror {
     }
     $versions = [regex]::Matches($html.Content, 'href="(\d+\.\d+\.\d+)/"') | ForEach-Object { $_.Groups[1].Value }
     if (-not $versions) { return $null }
+    # 只保留 3.x 且不超过版本上限的（$MaxPythonMinor，见文件开头常量说明：太新的 Python
+    # 依赖还没适配，会崩），再挑其中最新的一个。
     $sorted = $versions | ForEach-Object {
         $p = $_.Split('.')
         [PSCustomObject]@{ Version = $_; Major = [int]$p[0]; Minor = [int]$p[1]; Patch = [int]$p[2] }
-    } | Sort-Object Major, Minor, Patch -Descending
+    } | Where-Object { $_.Major -eq 3 -and $_.Minor -le $MaxPythonMinor } | Sort-Object Major, Minor, Patch -Descending
+    if (-not $sorted) { return $null }
 
     # 目录名存在不代表正式版已经放出来——新版本发布前，镜像会提前建好目录，
     # 里面只有 alpha / beta 预发布材料，这时正式的 Windows 安装包文件还没传上去，
@@ -363,6 +397,17 @@ Write-Host ""
 # ---------- 1. 检查运行环境（缺了就问一下要不要自动装）----------
 $pythonCmd = Find-Python
 if (-not $pythonCmd) {
+    # 先分清楚是「压根没装 Python」还是「装了但太新」。装了太新版本时，就算自动再装一个
+    # 3.13，PATH 里那个太新的也可能抢先、越搞越乱——不如直接把话说清楚，让用户自己换个版本。
+    $tooNew = Find-TooNewPython
+    if ($tooNew) {
+        Write-Fail "检测到 Python $tooNew，但游戏依赖目前还不支持这个版本。"
+        Write-Host ""
+        Write-Note "请安装 Python 3.11 ~ 3.13 中的任意一个（推荐 3.13）：https://www.python.org/downloads/"
+        Write-Note "安装时请务必勾选「Add Python to PATH」。装好后重新双击「心动实验室.exe」即可。"
+        Write-Host ""
+        Exit-Failed
+    }
     # 优先查 winget 目录里当前最新的 Python 版本；查不到（网络问题、winget 版本太旧
     # 等）就退回一个已知稳妥、生态兼容性验证过的版本，不能让这一步查询失败就把整个
     # 自动安装带崩。
@@ -432,7 +477,15 @@ if (-not (Test-Path -LiteralPath $VenvPy)) {
 if (-not (Test-Path -LiteralPath (Join-Path $FrontendDir 'node_modules'))) {
     Write-Step "[2/4] 首次运行，正在准备前端环境（约 1-2 分钟）..."
     Push-Location $FrontendDir
-    & npm install --no-audit --no-fund
+    # 跟后端 pip 一样，前端依赖也优先走国内镜像（npmmirror，原淘宝源）。国内网络下
+    # 默认的国外 registry 很慢，几万个小文件下起来尤其磨人。失败自动退回官方源，
+    # 双保险，不因为镜像临时抽风就把整个安装卡死。
+    Write-Note "正在下载依赖（走 npmmirror 国内镜像加速）..."
+    & npm install --no-audit --no-fund --registry https://registry.npmmirror.com
+    if ($LASTEXITCODE -ne 0) {
+        Write-Note "镜像源失败，改用官方源重试..."
+        & npm install --no-audit --no-fund
+    }
     $ok = $LASTEXITCODE -eq 0
     Pop-Location
     if (-not $ok) { Write-Fail "前端依赖安装失败，请检查网络连接。"; Exit-Failed }
