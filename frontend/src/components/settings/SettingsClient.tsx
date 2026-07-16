@@ -18,7 +18,10 @@ export function SettingsClient() {
   }, []);
 
   return (
-    <div className="pb-8">
+    // 桌面端外壳把内容区锁成一屏高且 overflow-hidden，设置页内容（大模型表单 + 本地数据卡片）
+    // 一旦超过一屏就会被裁掉、滚不到。这里让根节点成为高度确定、可纵向滚动的容器，
+    // 让两块内容作为整体一起滚动。移动端外壳不限高，走整页滚动，此处不受影响。
+    <div className="h-full overflow-y-auto pb-8">
       <SetupClient mode="settings" />
 
       <div className="mx-auto w-full max-w-lg px-4">
